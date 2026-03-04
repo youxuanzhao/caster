@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bevy = "0.18.1"
+mlua = { version = "0.11.6", features = ["lua55"] }
+rig-core = "0.31.0"
