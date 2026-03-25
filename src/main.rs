@@ -1,5 +1,5 @@
 use bevy::ecs::message::MessageReader;
-use bevy::input::keyboard::{Key, KeyboardInput};
+use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use mlua::prelude::*;
 use rig::client::{CompletionClient, ProviderClient};
@@ -292,6 +292,7 @@ fn setup_llm_channel(mut commands: Commands) {
 
 fn handle_keyboard_input(
     mut reader: MessageReader<KeyboardInput>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut input: ResMut<SpellInput>,
     mut input_display: Query<&mut Text, With<InputDisplay>>,
     mut casting: ResMut<CastingState>,
@@ -308,7 +309,8 @@ fn handle_keyboard_input(
     }
 
     let mut changed = false;
-    let mut submit = false;
+    // Use ButtonInput<KeyCode> for reliable Enter detection
+    let submit = keys.just_pressed(KeyCode::Enter);
 
     for event in &events {
         if !event.state.is_pressed() {
@@ -318,9 +320,6 @@ fn handle_keyboard_input(
             Key::Backspace => {
                 input.0.pop();
                 changed = true;
-            }
-            Key::Enter => {
-                submit = true;
             }
             Key::Character(c) => {
                 let s: &str = c.as_str();
