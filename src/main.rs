@@ -330,6 +330,10 @@ fn setup_llm_channel(mut commands: Commands) {
             }
         };
 
+        // Enter the Tokio runtime context so rig-core's internal reactor
+        // checks pass when building the client / agent.
+        let _guard = rt.enter();
+
         let client = openai::Client::from_env();
 
         let agent = client.agent("gpt-4o").preamble(SYSTEM_PROMPT).build();
