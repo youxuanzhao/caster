@@ -310,15 +310,22 @@ fn setup_llm_channel(mut commands: Commands) {
 
     std::thread::spawn(move || {
         if std::env::var("OPENAI_API_KEY").is_err() {
-            let _ = script_tx
-                .send("-- ERROR: OPENAI_API_KEY environment variable not set".into());
+            // Keep the thread alive so spell_rx isn't dropped — reply with
+            // an error for every request instead of silently breaking the channel.
+            while spell_rx.recv().is_ok() {
+                let _ = script_tx
+                    .send("-- ERROR: OPENAI_API_KEY environment variable not set".into());
+            }
             return;
         }
 
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
-                let _ = script_tx.send(format!("-- ERROR: failed to create runtime: {e}"));
+                let err = format!("-- ERROR: failed to create runtime: {e}");
+                while spell_rx.recv().is_ok() {
+                    let _ = script_tx.send(err.clone());
+                }
                 return;
             }
         };
@@ -409,21 +416,23 @@ fn handle_keyboard_input(
         }
 
         // Send to LLM
-        if channel
-            .tx
-            .lock()
-            .unwrap()
-            .send(spell_name.clone())
-            .is_ok()
-        {
-            log.push(format!("[submit] '{spell_name}'"));
-            log.push("[llm] Waiting for response...".to_string());
-            casting.0 = true;
-            for mut text in &mut status {
-                *text = Text::new(format!("Casting '{spell_name}'..."));
+        match channel.tx.lock().unwrap().send(spell_name.clone()) {
+            Ok(()) => {
+                log.push(format!("[submit] '{spell_name}'"));
+                log.push("[llm] Waiting for response...".to_string());
+                casting.0 = true;
+                for mut text in &mut status {
+                    *text = Text::new(format!("Casting '{spell_name}'..."));
+                }
+                for mut text in &mut input_display {
+                    *text = Text::new(format!("> {spell_name}"));
+                }
             }
-            for mut text in &mut input_display {
-                *text = Text::new(format!("> {spell_name}"));
+            Err(_) => {
+                log.push("[error] LLM channel closed — cannot send request".to_string());
+                for mut text in &mut status {
+                    *text = Text::new("Error: LLM thread not available");
+                }
             }
         }
     }
