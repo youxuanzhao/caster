@@ -66,6 +66,9 @@ struct InputDisplay;
 #[derive(Component)]
 struct StatusDisplay;
 
+#[derive(Component)]
+struct LogPanel;
+
 // ---------------------------------------------------------------------------
 // Resources
 // ---------------------------------------------------------------------------
@@ -84,6 +87,34 @@ struct PendingCommands(Vec<SpellCommand>);
 
 #[derive(Resource, Default)]
 struct CastingState(bool);
+
+const MAX_LOG_LINES: usize = 50;
+
+#[derive(Resource)]
+struct ActivityLog {
+    entries: Vec<String>,
+}
+
+impl Default for ActivityLog {
+    fn default() -> Self {
+        Self {
+            entries: vec!["[system] Ready. Type a spell and press Enter.".into()],
+        }
+    }
+}
+
+impl ActivityLog {
+    fn push(&mut self, msg: impl Into<String>) {
+        self.entries.push(msg.into());
+        if self.entries.len() > MAX_LOG_LINES {
+            self.entries.remove(0);
+        }
+    }
+
+    fn text(&self) -> String {
+        self.entries.join("\n")
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Lua → Bevy command buffer
@@ -139,6 +170,7 @@ fn main() {
         .init_resource::<SpellInput>()
         .init_resource::<PendingCommands>()
         .init_resource::<CastingState>()
+        .init_resource::<ActivityLog>()
         .add_systems(Startup, (setup_scene, setup_ui, setup_llm_channel))
         .add_systems(
             Update,
@@ -146,6 +178,7 @@ fn main() {
                 handle_keyboard_input,
                 poll_llm_response,
                 process_spell_commands,
+                update_log_display,
                 animate_movement,
                 tick_lifetimes,
             )
@@ -241,6 +274,34 @@ fn setup_ui(mut commands: Commands) {
                 InputDisplay,
             ));
         });
+
+    // Log panel (right side)
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                right: Val::Px(0.0),
+                width: Val::Px(360.0),
+                height: Val::Percent(100.0),
+                padding: UiRect::all(Val::Px(12.0)),
+                overflow: Overflow::clip(),
+                flex_direction: FlexDirection::ColumnReverse,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.04, 0.04, 0.06, 0.85)),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new("[system] Ready. Type a spell and press Enter."),
+                TextFont {
+                    font_size: 13.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.55, 0.55, 0.55)),
+                LogPanel,
+            ));
+        });
 }
 
 fn setup_llm_channel(mut commands: Commands) {
@@ -294,12 +355,13 @@ fn handle_keyboard_input(
     mut reader: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     mut input: ResMut<SpellInput>,
-    mut input_display: Query<&mut Text, With<InputDisplay>>,
+    mut input_display: Query<&mut Text, (With<InputDisplay>, Without<StatusDisplay>, Without<LogPanel>)>,
     mut casting: ResMut<CastingState>,
     channel: Res<LlmChannel>,
-    mut status: Query<&mut Text, (With<StatusDisplay>, Without<InputDisplay>)>,
+    mut status: Query<&mut Text, (With<StatusDisplay>, Without<InputDisplay>, Without<LogPanel>)>,
     spell_entities: Query<Entity, With<SpellEntity>>,
     mut commands: Commands,
+    mut log: ResMut<ActivityLog>,
 ) {
     // Drain events even when casting so they don't pile up
     let events: Vec<_> = reader.read().cloned().collect();
@@ -354,6 +416,8 @@ fn handle_keyboard_input(
             .send(spell_name.clone())
             .is_ok()
         {
+            log.push(format!("[submit] '{spell_name}'"));
+            log.push("[llm] Waiting for response...".to_string());
             casting.0 = true;
             for mut text in &mut status {
                 *text = Text::new(format!("Casting '{spell_name}'..."));
@@ -369,9 +433,10 @@ fn poll_llm_response(
     channel: Res<LlmChannel>,
     mut casting: ResMut<CastingState>,
     mut pending: ResMut<PendingCommands>,
-    mut status: Query<&mut Text, With<StatusDisplay>>,
+    mut status: Query<&mut Text, (With<StatusDisplay>, Without<InputDisplay>, Without<LogPanel>)>,
     mut input: ResMut<SpellInput>,
-    mut input_display: Query<&mut Text, (With<InputDisplay>, Without<StatusDisplay>)>,
+    mut input_display: Query<&mut Text, (With<InputDisplay>, Without<StatusDisplay>, Without<LogPanel>)>,
+    mut log: ResMut<ActivityLog>,
 ) {
     if !casting.0 {
         return;
@@ -382,6 +447,7 @@ fn poll_llm_response(
         Err(mpsc::TryRecvError::Empty) => return,
         Err(mpsc::TryRecvError::Disconnected) => {
             casting.0 = false;
+            log.push("[error] LLM thread disconnected");
             for mut text in &mut status {
                 *text = Text::new("LLM thread disconnected");
             }
@@ -396,25 +462,55 @@ fn poll_llm_response(
     }
 
     if script.starts_with("-- ERROR:") {
+        let err_msg = script.trim_start_matches("-- ERROR:").trim();
+        log.push(format!("[error] {err_msg}"));
         for mut text in &mut status {
-            *text = Text::new(script.trim_start_matches("-- ERROR:").trim().to_string());
+            *text = Text::new(err_msg.to_string());
         }
         return;
     }
 
+    log.push("[llm] Response received:");
+    // Log the script, truncating long lines
+    for line in script.lines().take(20) {
+        let display_line = if line.len() > 60 {
+            format!("  {}...", &line[..57])
+        } else {
+            format!("  {line}")
+        };
+        log.push(display_line);
+    }
+    if script.lines().count() > 20 {
+        log.push(format!("  ... ({} more lines)", script.lines().count() - 20));
+    }
+
     // Execute Lua script
+    log.push("[lua] Executing script...".to_string());
     match execute_lua_script(&script) {
         Ok(cmds) => {
             let count = cmds.len();
             pending.0 = cmds;
+            log.push(format!("[lua] Success: {count} commands spawned"));
             for mut text in &mut status {
                 *text = Text::new(format!("Spell cast! ({count} commands)"));
             }
         }
         Err(e) => {
+            log.push(format!("[error] Lua: {e}"));
             for mut text in &mut status {
                 *text = Text::new(format!("Lua error: {e}"));
             }
+        }
+    }
+}
+
+fn update_log_display(
+    log: Res<ActivityLog>,
+    mut query: Query<&mut Text, With<LogPanel>>,
+) {
+    if log.is_changed() {
+        for mut text in &mut query {
+            *text = Text::new(log.text());
         }
     }
 }
