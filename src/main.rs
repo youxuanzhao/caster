@@ -6,7 +6,7 @@ use rig::client::{CompletionClient, ProviderClient};
 use rig::completion::Prompt;
 use rig::providers::openai;
 use std::collections::HashMap;
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -313,8 +313,8 @@ fn setup_llm_channel(mut commands: Commands) {
             // Keep the thread alive so spell_rx isn't dropped — reply with
             // an error for every request instead of silently breaking the channel.
             while spell_rx.recv().is_ok() {
-                let _ = script_tx
-                    .send("-- ERROR: OPENAI_API_KEY environment variable not set".into());
+                let _ =
+                    script_tx.send("-- ERROR: OPENAI_API_KEY environment variable not set".into());
             }
             return;
         }
@@ -366,10 +366,24 @@ fn handle_keyboard_input(
     mut reader: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     mut input: ResMut<SpellInput>,
-    mut input_display: Query<&mut Text, (With<InputDisplay>, Without<StatusDisplay>, Without<LogPanel>)>,
+    mut input_display: Query<
+        &mut Text,
+        (
+            With<InputDisplay>,
+            Without<StatusDisplay>,
+            Without<LogPanel>,
+        ),
+    >,
     mut casting: ResMut<CastingState>,
     channel: Res<LlmChannel>,
-    mut status: Query<&mut Text, (With<StatusDisplay>, Without<InputDisplay>, Without<LogPanel>)>,
+    mut status: Query<
+        &mut Text,
+        (
+            With<StatusDisplay>,
+            Without<InputDisplay>,
+            Without<LogPanel>,
+        ),
+    >,
     spell_entities: Query<Entity, With<SpellEntity>>,
     mut commands: Commands,
     mut log: ResMut<ActivityLog>,
@@ -392,6 +406,10 @@ fn handle_keyboard_input(
         match &event.logical_key {
             Key::Backspace => {
                 input.0.pop();
+                changed = true;
+            }
+            Key::Space => {
+                input.0.push(' ');
                 changed = true;
             }
             Key::Character(c) => {
@@ -446,9 +464,23 @@ fn poll_llm_response(
     channel: Res<LlmChannel>,
     mut casting: ResMut<CastingState>,
     mut pending: ResMut<PendingCommands>,
-    mut status: Query<&mut Text, (With<StatusDisplay>, Without<InputDisplay>, Without<LogPanel>)>,
+    mut status: Query<
+        &mut Text,
+        (
+            With<StatusDisplay>,
+            Without<InputDisplay>,
+            Without<LogPanel>,
+        ),
+    >,
     mut input: ResMut<SpellInput>,
-    mut input_display: Query<&mut Text, (With<InputDisplay>, Without<StatusDisplay>, Without<LogPanel>)>,
+    mut input_display: Query<
+        &mut Text,
+        (
+            With<InputDisplay>,
+            Without<StatusDisplay>,
+            Without<LogPanel>,
+        ),
+    >,
     mut log: ResMut<ActivityLog>,
 ) {
     if !casting.0 {
@@ -494,7 +526,10 @@ fn poll_llm_response(
         log.push(display_line);
     }
     if script.lines().count() > 20 {
-        log.push(format!("  ... ({} more lines)", script.lines().count() - 20));
+        log.push(format!(
+            "  ... ({} more lines)",
+            script.lines().count() - 20
+        ));
     }
 
     // Execute Lua script
@@ -517,10 +552,7 @@ fn poll_llm_response(
     }
 }
 
-fn update_log_display(
-    log: Res<ActivityLog>,
-    mut query: Query<&mut Text, With<LogPanel>>,
-) {
+fn update_log_display(log: Res<ActivityLog>, mut query: Query<&mut Text, With<LogPanel>>) {
     if log.is_changed() {
         for mut text in &mut query {
             *text = Text::new(log.text());
@@ -678,8 +710,8 @@ fn tick_lifetimes(
 // ---------------------------------------------------------------------------
 
 fn execute_lua_script(script: &str) -> Result<Vec<SpellCommand>, String> {
-    let lua = Lua::new_with(mlua::StdLib::ALL_SAFE, LuaOptions::default())
-        .map_err(|e| e.to_string())?;
+    let lua =
+        Lua::new_with(mlua::StdLib::ALL_SAFE, LuaOptions::default()).map_err(|e| e.to_string())?;
 
     let commands = std::sync::Arc::new(std::sync::Mutex::new(Vec::<SpellCommand>::new()));
     let next_id = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(1));
@@ -743,9 +775,7 @@ fn execute_lua_script(script: &str) -> Result<Vec<SpellCommand>, String> {
                 Ok(())
             })
             .map_err(|e| e.to_string())?;
-        lua.globals()
-            .set("move_to", f)
-            .map_err(|e| e.to_string())?;
+        lua.globals().set("move_to", f).map_err(|e| e.to_string())?;
     }
 
     // -- set_lifetime(id, seconds)
@@ -786,14 +816,16 @@ fn execute_lua_script(script: &str) -> Result<Vec<SpellCommand>, String> {
     {
         let cmds = commands.clone();
         let f = lua
-            .create_function(move |_, (id, r, g, b, intensity): (u32, f32, f32, f32, f32)| {
-                cmds.lock().unwrap().push(SpellCommand::SetEmission {
-                    id,
-                    color: [r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)],
-                    intensity: intensity.max(0.0),
-                });
-                Ok(())
-            })
+            .create_function(
+                move |_, (id, r, g, b, intensity): (u32, f32, f32, f32, f32)| {
+                    cmds.lock().unwrap().push(SpellCommand::SetEmission {
+                        id,
+                        color: [r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)],
+                        intensity: intensity.max(0.0),
+                    });
+                    Ok(())
+                },
+            )
             .map_err(|e| e.to_string())?;
         lua.globals()
             .set("set_emission", f)
