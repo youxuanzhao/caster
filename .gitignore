@@ -1,2 +1,5 @@
 /target
 .env
+/.claude
+.DS_Store
+*.DS_Store
