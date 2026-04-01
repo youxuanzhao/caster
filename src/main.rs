@@ -1,5 +1,6 @@
 use bevy::ecs::message::MessageReader;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use mlua::prelude::*;
 use rig::client::{CompletionClient, ProviderClient};
@@ -70,6 +71,14 @@ struct StatusDisplay;
 
 #[derive(Component)]
 struct LogPanel;
+
+#[derive(Component)]
+struct CameraRig {
+    focus: Vec3,
+    yaw: f32,
+    pitch: f32,
+    distance: f32,
+}
 
 // ---------------------------------------------------------------------------
 // Resources
@@ -177,6 +186,7 @@ fn main() {
         .add_systems(
             Update,
             (
+                camera_mouse_control,
                 handle_keyboard_input,
                 poll_llm_response,
                 process_spell_commands,
@@ -226,10 +236,23 @@ fn setup_scene(
         Transform::from_xyz(-6.0, 8.0, -4.0),
     ));
 
-    // Camera
+    // Camera – derive initial orbital parameters from starting position
+    let cam_pos = Vec3::new(-2.0, 5.0, 10.0);
+    let focus = Vec3::ZERO;
+    let offset = cam_pos - focus;
+    let distance = offset.length();
+    let yaw = offset.x.atan2(offset.z);
+    let pitch = (offset.y / distance).asin();
+
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(-2.0, 5.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_translation(cam_pos).looking_at(focus, Vec3::Y),
+        CameraRig {
+            focus,
+            yaw,
+            pitch,
+            distance,
+        },
     ));
 }
 
@@ -363,6 +386,52 @@ fn setup_llm_channel(mut commands: Commands) {
 // ---------------------------------------------------------------------------
 // Update systems
 // ---------------------------------------------------------------------------
+
+fn camera_mouse_control(
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    motion: Res<AccumulatedMouseMotion>,
+    scroll: Res<AccumulatedMouseScroll>,
+    mut query: Query<(&mut Transform, &mut CameraRig)>,
+) {
+    let Ok((mut transform, mut rig)) = query.single_mut() else {
+        return;
+    };
+
+    let delta = motion.delta;
+
+    // Right-drag: orbit (rotate around focus)
+    if mouse_buttons.pressed(MouseButton::Right) {
+        rig.yaw -= delta.x * 0.005;
+        rig.pitch += delta.y * 0.005;
+        rig.pitch = rig.pitch.clamp(-std::f32::consts::FRAC_PI_2 + 0.05, std::f32::consts::FRAC_PI_2 - 0.05);
+    }
+
+    // Left-drag: pan (move focus point along camera-local right/up)
+    if mouse_buttons.pressed(MouseButton::Left) {
+        let right = transform.rotation * Vec3::X;
+        let up = transform.rotation * Vec3::Y;
+        let pan_speed = rig.distance * 0.002;
+        rig.focus -= right * delta.x * pan_speed;
+        rig.focus += up * delta.y * pan_speed;
+    }
+
+    // Scroll: zoom in/out
+    let scroll_y = scroll.delta.y;
+    if scroll_y != 0.0 {
+        rig.distance *= 1.0 - scroll_y * 0.1;
+        rig.distance = rig.distance.clamp(1.0, 200.0);
+    }
+
+    // Rebuild camera transform from orbital parameters
+    let offset = Vec3::new(
+        rig.yaw.sin() * rig.pitch.cos(),
+        rig.pitch.sin(),
+        rig.yaw.cos() * rig.pitch.cos(),
+    ) * rig.distance;
+
+    transform.translation = rig.focus + offset;
+    transform.look_at(rig.focus, Vec3::Y);
+}
 
 fn handle_keyboard_input(
     mut reader: MessageReader<KeyboardInput>,
