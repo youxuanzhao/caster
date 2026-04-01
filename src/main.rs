@@ -12,8 +12,8 @@ use std::sync::{Mutex, mpsc};
 // Constants
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT: &str = r#"You are a visual effects script generator for a 3D game engine.
-Given a spell or effect name, output ONLY a Lua script (no markdown fences, no explanation).
+const SYSTEM_PROMPT: &str = r#"You are a 3D model and animation generator for a 3D game engine.
+Given a description, output ONLY a Lua script (no markdown fences, no explanation).
 
 Available functions:
 
@@ -40,6 +40,8 @@ math.sqrt(), math.abs(), loops, variables, tostring, tonumber, pairs, ipairs.
 
 Scene: centre is (0,0,0). Y is up. Camera looks at origin from roughly (-2, 5, 10).
 Create visually interesting effects with multiple entities, varied sizes, colors, and animations.
+Adhere to the description but be creative.
+You cannot use any os functions, file I/O, or external libraries.
 Output raw Lua only – no markdown, no comments outside the script."#;
 
 // ---------------------------------------------------------------------------
@@ -197,13 +199,13 @@ fn setup_scene(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // Ground plane
-    commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(20.0, 20.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.15, 0.15, 0.18),
-            ..default()
-        })),
-    ));
+    // commands.spawn((
+    //     Mesh3d(meshes.add(Plane3d::default().mesh().size(20.0, 20.0))),
+    //     MeshMaterial3d(materials.add(StandardMaterial {
+    //         base_color: Color::srgb(0.15, 0.15, 0.18),
+    //         ..default()
+    //     })),
+    // ));
 
     // Light
     commands.spawn((
@@ -336,7 +338,7 @@ fn setup_llm_channel(mut commands: Commands) {
 
         let client = openai::Client::from_env();
 
-        let agent = client.agent("gpt-4o").preamble(SYSTEM_PROMPT).build();
+        let agent = client.agent("gpt-5.1").preamble(SYSTEM_PROMPT).build();
 
         while let Ok(spell_name) = spell_rx.recv() {
             let prompt_text = format!("Create a visual effect for: {spell_name}");
